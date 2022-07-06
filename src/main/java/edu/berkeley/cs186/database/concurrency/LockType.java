@@ -1,5 +1,7 @@
 package edu.berkeley.cs186.database.concurrency;
 
+import edu.berkeley.cs186.database.DatabaseException;
+
 /**
  * Utility methods to track the relationships between different lock types.
  */
@@ -22,8 +24,22 @@ public enum LockType {
             throw new NullPointerException("null lock type");
         }
         // TODO(proj4_part1): implement
-
-        return false;
+        switch (a) {
+            case NL:
+                return true;
+            case IS:
+                return b != X;
+            case IX:
+                return b == NL || b == IS || b == IX;
+            case S:
+                return b == NL || b == IS || b == S;
+            case SIX:
+                return b == NL || b == IS;
+            case X:
+                return b == NL;
+            default:
+                throw new DatabaseException("bad lock type");
+        }
     }
 
     /**
@@ -54,8 +70,21 @@ public enum LockType {
             throw new NullPointerException("null lock type");
         }
         // TODO(proj4_part1): implement
+        switch (childLockType) {
+            case NL:
+                return true;
+            case IS:
+            case S:
+                return parentLockType == IS || parentLockType == IX;
+            case IX:
+            case X:
+                return parentLockType == IX || parentLockType == SIX;
+            case SIX:
+                return parentLockType == IX;
+            default:
+                throw new UnsupportedOperationException("bad lock type");
 
-        return false;
+        }
     }
 
     /**
@@ -69,8 +98,22 @@ public enum LockType {
             throw new NullPointerException("null lock type");
         }
         // TODO(proj4_part1): implement
-
-        return false;
+        switch (substitute) {
+            case NL:
+                return required == NL;
+            case IS:
+                return required == NL || required == IS;
+            case IX:
+                return required == NL || required == IS || required == IX;
+            case S:
+                return required == NL || required == IS || required == S;
+            case SIX:
+                return required != X;
+            case X:
+                return true;
+            default:
+                throw new UnsupportedOperationException("bad lock type");
+        }
     }
 
     /**

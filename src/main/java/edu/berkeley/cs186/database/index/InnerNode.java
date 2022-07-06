@@ -1,5 +1,4 @@
 package edu.berkeley.cs186.database.index;
-
 import edu.berkeley.cs186.database.common.Buffer;
 import edu.berkeley.cs186.database.common.Pair;
 import edu.berkeley.cs186.database.concurrency.LockContext;
@@ -9,6 +8,7 @@ import edu.berkeley.cs186.database.memory.BufferManager;
 import edu.berkeley.cs186.database.memory.Page;
 import edu.berkeley.cs186.database.table.RecordId;
 
+import javax.xml.crypto.Data;
 import java.nio.ByteBuffer;
 import java.util.*;
 
@@ -77,46 +77,112 @@ class InnerNode extends BPlusNode {
     }
 
     // Core API ////////////////////////////////////////////////////////////////
+    private int getPosition(DataBox key) {
+        int left = 0, right = keys.size();
+        while(left < right) {
+            int mid = (left+right)/2;
+            DataBox midKey = keys.get(mid);
+            if(key.compareTo(midKey) < 0) {
+                right = mid;
+            } else {
+                left = mid+1;
+            }
+        }
+        return left;
+    }
+
     // See BPlusNode.get.
     @Override
     public LeafNode get(DataBox key) {
-        // TODO(proj2): implement
-
-        return null;
+        int pos = getPosition(key);
+        return getChild(pos).get(key);
     }
 
     // See BPlusNode.getLeftmostLeaf.
     @Override
     public LeafNode getLeftmostLeaf() {
         assert(children.size() > 0);
-        // TODO(proj2): implement
-
-        return null;
+        return getChild(0).getLeftmostLeaf();
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
+        try {
+            int pos = getPosition(key);
+            Optional<Pair<DataBox, Long>> up = getChild(pos).put(key, rid);
+            if (up.isEmpty()) {
+                return up;
+            }
+            addOne(up.get());
+            return split();
+        } finally {
+            sync();
+        }
+    }
 
-        return Optional.empty();
+    private void addOne(Pair<DataBox, Long> pair) {
+        int pos = getPosition(pair.getFirst());
+        if(pos == 0) {
+            keys.add(0, pair.getFirst());
+            children.add(1, pair.getSecond());
+        } else if (pos == keys.size()) {
+            keys.add(pair.getFirst());
+            children.add(pair.getSecond());
+        } else {
+            keys.add(pos, pair.getFirst());
+            children.add(pos+1, pair.getSecond());
+        }
+    }
+
+    private Optional<Pair<DataBox, Long>> split() {
+        int order = metadata.getOrder();
+        if(keys.size() <= order * 2) {
+            return Optional.empty();
+        }
+
+        List<DataBox> newKeys = keys.subList(order+1, keys.size());
+        List<Long> newChildren = children.subList(order+1, children.size());
+
+        InnerNode newNode = new InnerNode(metadata, bufferManager, newKeys, newChildren, treeContext);
+        Optional<Pair<DataBox, Long>> ret = Optional.of(new Pair<>(keys.get(order), newNode.getPage().getPageNum()));
+        keys = keys.subList(0,order);
+        children = children.subList(0,order+1);
+        return ret;
     }
 
     // See BPlusNode.bulkLoad.
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
-        // TODO(proj2): implement
-
-        return Optional.empty();
+        try{
+            while(data.hasNext()) {
+                if(children.size() > 1) {
+                    BPlusNode rightMostChild = getChild(children.size()-1);
+                    Optional<Pair<DataBox, Long>> next = rightMostChild.bulkLoad(data, fillFactor);
+                    while(next.isPresent()) {
+                        addOne(next.get());
+                        Optional<Pair<DataBox, Long>> splitNode = split();
+                        if(splitNode.isPresent()) {
+                            return splitNode;
+                        }
+                        rightMostChild = getChild(children.size()-1);
+                        next = rightMostChild.bulkLoad(data, fillFactor);
+                    }
+                }
+            }
+            return Optional.empty();
+        } finally {
+            sync();
+        }
     }
 
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
-
-        return;
+        // 不用sync
+        int pos = getPosition(key);
+        getChild(pos).remove(key);
     }
 
     // Helpers /////////////////////////////////////////////////////////////////

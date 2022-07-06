@@ -1,6 +1,8 @@
 package edu.berkeley.cs186.database.query;
 
+import edu.berkeley.cs186.database.DatabaseException;
 import edu.berkeley.cs186.database.TransactionContext;
+import edu.berkeley.cs186.database.common.Pair;
 import edu.berkeley.cs186.database.common.PredicateOperator;
 import edu.berkeley.cs186.database.databox.DataBox;
 import edu.berkeley.cs186.database.query.expr.Expression;
@@ -9,6 +11,7 @@ import edu.berkeley.cs186.database.query.join.SNLJOperator;
 import edu.berkeley.cs186.database.table.Record;
 import edu.berkeley.cs186.database.table.Schema;
 
+import javax.print.DocFlavor;
 import java.util.*;
 
 /**
@@ -577,6 +580,23 @@ public class QueryPlan {
         QueryOperator minOp = new SequentialScanOperator(this.transaction, table);
 
         // TODO(proj3_part2): implement
+        int minCost = minOp.estimateIOCost();
+        int minIndex = -1;
+        List<Integer> predicateIndexes = getEligibleIndexColumns(table);
+        for (int index : predicateIndexes) {
+            SelectPredicate selectPredicate = selectPredicates.get(index);
+            QueryOperator tempOp = new IndexScanOperator(transaction, table, selectPredicate.column,
+                    selectPredicate.operator, selectPredicate.value);
+            int cost = tempOp.estimateIOCost();
+            if (cost < minCost) {
+                minCost = cost;
+                minOp = tempOp;
+                minIndex = index;
+            }
+        }
+
+        minOp = addEligibleSelections(minOp, minIndex);
+
         return minOp;
     }
 
@@ -646,6 +666,43 @@ public class QueryPlan {
         //      calculate the cheapest join with the new table (the one you
         //      fetched an operator for from pass1Map) and the previously joined
         //      tables. Then, update the result map if needed.
+        for (Set<String> tables : prevMap.keySet()) {
+            for (JoinPredicate joinPredicate : joinPredicates) {
+                String leftTable = joinPredicate.leftTable, rightTable = joinPredicate.rightTable;
+                String leftCol = joinPredicate.leftColumn, rightCol = joinPredicate.rightColumn;
+                // Case 3
+                if (tables.contains(leftTable) && tables.contains(rightTable)
+                    || !tables.contains(leftTable) && !tables.contains(rightTable)) {
+                    continue;
+                }
+
+                Set<String> keySet = new HashSet<>();
+                QueryOperator op = null;
+                // Case 1
+                if (tables.contains(leftTable)) {
+                    keySet.add(rightTable);
+                    op = minCostJoinType(prevMap.get(tables), pass1Map.get(keySet), leftCol, rightCol);
+                }
+                // Case 2，注意是left-deep。如果这里不调换位置，需要temp file存储中间结果，影响效率
+                else {
+                    keySet.add(leftTable);
+                    op = minCostJoinType(prevMap.get(tables), pass1Map.get(keySet), rightCol, leftCol);
+                }
+
+                keySet.addAll(tables);
+                if (!result.containsKey(keySet)) {
+                    result.put(keySet, op);
+                }
+                // 之前有过执行结果，那么需要比较怎样的join顺序更快
+                else {
+                    int oldCost = result.get(keySet).estimateIOCost();
+                    int newCost = op.estimateIOCost();
+                    if (newCost < oldCost) {
+                        result.put(keySet, op);
+                    }
+                }
+            }
+        }
         return result;
     }
 
@@ -695,7 +752,32 @@ public class QueryPlan {
         // Set the final operator to the lowest cost operator from the last
         // pass, add group by, project, sort and limit operators, and return an
         // iterator over the final operator.
-        return this.executeNaive(); // TODO(proj3_part2): Replace this!
+        this.transaction.setAliasMap(this.aliases);
+        Map<Set<String>, QueryOperator> pass1Map = new HashMap<>();
+        for (String table : tableNames) {
+            pass1Map.put(Collections.singleton(table), minCostSingleAccess(table));
+        }
+        Map<Set<String>, QueryOperator> prevMap = pass1Map;
+        boolean isEnd = false;
+        while (!isEnd) {
+            for (Set<String> set : prevMap.keySet()) {
+                if (set.size() == tableNames.size()) {
+                    isEnd = true;
+                }
+                break;
+            }
+            if(isEnd) {
+                break;
+            }
+            prevMap = minCostJoins(prevMap, pass1Map);
+        }
+        QueryOperator minOp = minCostOperator(prevMap);
+        this.finalOperator = minOp;
+        this.addGroupBy();
+        this.addProject();
+        this.addSort();
+        this.addLimit();
+        return this.finalOperator.iterator();
     }
 
     // EXECUTE NAIVE ///////////////////////////////////////////////////////////

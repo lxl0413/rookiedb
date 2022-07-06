@@ -87,7 +87,8 @@ public class BNLJOperator extends JoinOperator {
          * Make sure you pass in the correct schema to this method.
          */
         private void fetchNextLeftBlock() {
-            // TODO(proj3_part1): implement
+            leftBlockIterator = QueryOperator.getBlockIterator(leftSourceIterator, getLeftSource().getSchema(), numBuffers-2);
+            leftBlockIterator.markNext();
         }
 
         /**
@@ -102,7 +103,8 @@ public class BNLJOperator extends JoinOperator {
          * Make sure you pass in the correct schema to this method.
          */
         private void fetchNextRightPage() {
-            // TODO(proj3_part1): implement
+            rightPageIterator = QueryOperator.getBlockIterator(rightSourceIterator, getRightSource().getSchema(), 1);
+            rightPageIterator.markNext();
         }
 
         /**
@@ -114,8 +116,35 @@ public class BNLJOperator extends JoinOperator {
          * of JoinOperator).
          */
         private Record fetchNextRecord() {
-            // TODO(proj3_part1): implement
-            return null;
+            while(true) {
+                if (leftRecord == null) {
+                    if (leftBlockIterator.hasNext()) {
+                        leftRecord = leftBlockIterator.next();
+                        rightPageIterator.reset();
+                    } else {
+                        if (!rightSourceIterator.hasNext()) {
+                            rightSourceIterator.reset();
+                            fetchNextLeftBlock();
+                        } else {
+                            leftBlockIterator.reset();
+                        }
+                        fetchNextRightPage();
+                        if (!leftBlockIterator.hasNext()) {
+                            return null;
+                        }
+                        leftRecord = leftBlockIterator.next();
+                    }
+                }
+
+                if(rightPageIterator.hasNext()) {
+                    Record rightRecord = rightPageIterator.next();
+                    if (compare(leftRecord, rightRecord) == 0) {
+                        return leftRecord.concat(rightRecord);
+                    }
+                } else {
+                    leftRecord = null;
+                }
+            }
         }
 
         /**
